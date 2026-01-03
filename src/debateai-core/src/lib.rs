@@ -15,5 +15,5 @@ pub use participant::{AIParticipant, ParticipantRole};
 pub use orchestrator::{DebateOrchestrator, DebateConfig, DebateMessage, DebateEvent};
 pub use error::DebateError;
 pub use config::{Config, VoicesConfig};
-pub use tts::{DebateTts, combine_audio_segments, generate_output_filename};
+pub use tts::{DebateTts, combine_audio_segments, generate_output_filename, adjust_audio_speed};
 

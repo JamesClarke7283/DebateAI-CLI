@@ -7,6 +7,7 @@ use colored::Colorize;
 use debateai_core::{
     debate_format, AIParticipant, Config, DebateConfig, DebateEvent, DebateOrchestrator,
     DebateTts, ParticipantRole, VoicesConfig, combine_audio_segments, generate_output_filename,
+    adjust_audio_speed,
 };
 use std::env;
 use std::path::PathBuf;
@@ -64,6 +65,11 @@ struct Cli {
     /// Announcer voice ID (for section announcements in audio)
     #[arg(long, value_name = "VOICE")]
     announcer_voice: Option<String>,
+
+    /// Speech rate for TTS (0.5 = half speed, 1.0 = normal, 2.0 = double)
+    /// Lower values sound more measured/deliberate for debates
+    #[arg(long, default_value = "0.85", value_name = "RATE")]
+    speech_rate: f32,
 }
 
 #[tokio::main]
@@ -272,11 +278,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  Combining audio segments...");
                     let combined = combine_audio_segments(audio_segments, 1.0, 24000);
                     
+                    // Apply speech rate adjustment
+                    let adjusted = if cli.speech_rate != 1.0 {
+                        println!("  Adjusting speech rate to {}x...", cli.speech_rate);
+                        adjust_audio_speed(combined, cli.speech_rate)
+                    } else {
+                        combined
+                    };
+                    
                     // Save to file
                     let filename = generate_output_filename(&cli.topic);
                     let output_path = cli.output_dir.join(&filename);
                     
-                    match tts.save_wav(&output_path, &combined) {
+                    match tts.save_wav(&output_path, &adjusted) {
                         Ok(_) => {
                             println!();
                             println!(

@@ -194,6 +194,34 @@ fn split_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
     chunks
 }
 
+/// Adjust audio playback speed using linear interpolation.
+/// Rate < 1.0 = slower (e.g., 0.75 = 75% speed), Rate > 1.0 = faster.
+pub fn adjust_audio_speed(samples: Vec<f32>, rate: f32) -> Vec<f32> {
+    if (rate - 1.0).abs() < 0.001 {
+        return samples; // No change needed
+    }
+    
+    // Calculate new length (slower = longer)
+    let new_len = (samples.len() as f32 / rate) as usize;
+    let mut result = Vec::with_capacity(new_len);
+    
+    for i in 0..new_len {
+        let src_pos = i as f32 * rate;
+        let src_idx = src_pos as usize;
+        let frac = src_pos - src_idx as f32;
+        
+        if src_idx + 1 < samples.len() {
+            // Linear interpolation between adjacent samples
+            let sample = samples[src_idx] * (1.0 - frac) + samples[src_idx + 1] * frac;
+            result.push(sample);
+        } else if src_idx < samples.len() {
+            result.push(samples[src_idx]);
+        }
+    }
+    
+    result
+}
+
 /// Combine multiple audio segments with silence gaps.
 pub fn combine_audio_segments(segments: Vec<Vec<f32>>, gap_seconds: f32, sample_rate: u32) -> Vec<f32> {
     let gap_samples = (gap_seconds * sample_rate as f32) as usize;
