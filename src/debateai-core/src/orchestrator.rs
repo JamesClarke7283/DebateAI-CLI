@@ -6,13 +6,13 @@ use crate::debate_format::{DebateFormat, DebateSection};
 use crate::error::DebateError;
 use crate::participant::AIParticipant;
 
+use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessage, ChatCompletionRequestUserMessage,
     CreateChatCompletionRequestArgs,
 };
-use async_openai::Client;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for running a debate.
@@ -27,7 +27,11 @@ pub struct DebateConfig {
 }
 
 impl DebateConfig {
-    pub fn new(topic: impl Into<String>, api_base: impl Into<String>, api_key: impl Into<String>) -> Self {
+    pub fn new(
+        topic: impl Into<String>,
+        api_base: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
         Self {
             topic: topic.into(),
             api_base: api_base.into(),
@@ -169,7 +173,9 @@ impl DebateOrchestrator {
             // Build the prompt for this turn
             let section_prompt = format!(
                 "[{} - {}]\nPlease provide your {}.",
-                section.name, section.description, section.name.to_lowercase()
+                section.name,
+                section.description,
+                section.name.to_lowercase()
             );
 
             // Add section prompt to this participant's history
@@ -181,9 +187,7 @@ impl DebateOrchestrator {
             ));
 
             // Get response from the AI
-            let response = self
-                .get_completion(speaker_idx, section.max_tokens)
-                .await?;
+            let response = self.get_completion(speaker_idx, section.max_tokens).await?;
 
             // Sanitize the response (strip reasoning tokens)
             let sanitized_response = sanitize_response(&response);
@@ -250,7 +254,9 @@ impl DebateOrchestrator {
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| DebateError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| {
+                DebateError::ConfigError(format!("Failed to create HTTP client: {}", e))
+            })?;
 
         let config = OpenAIConfig::new()
             .with_api_key(&self.config.api_key)
@@ -267,14 +273,14 @@ impl DebateOrchestrator {
         // Retry logic with exponential backoff
         let max_retries = 3;
         let mut last_error = None;
-        
+
         for attempt in 0..max_retries {
             if attempt > 0 {
                 // Exponential backoff: 1s, 2s, 4s
                 let delay = std::time::Duration::from_secs(1 << attempt);
                 tokio::time::sleep(delay).await;
             }
-            
+
             match client.chat().create(request.clone()).await {
                 Ok(response) => {
                     let content = response
@@ -318,18 +324,30 @@ impl DebateOrchestrator {
 }
 
 /// Sanitize AI response by stripping reasoning tokens and XML-like tags.
-/// 
+///
 /// Removes patterns like <thinking>...</thinking>, <reflection>...</reflection>, etc.
 fn sanitize_response(response: &str) -> String {
     // List of known reasoning/internal tags to strip with their content
     let tags_to_strip = [
-        "thinking", "think", "reflection", "reflect", "internal", 
-        "reasoning", "thought", "scratch", "scratchpad", "plan",
-        "analysis", "analyze", "consider", "pondering", "deliberation"
+        "thinking",
+        "think",
+        "reflection",
+        "reflect",
+        "internal",
+        "reasoning",
+        "thought",
+        "scratch",
+        "scratchpad",
+        "plan",
+        "analysis",
+        "analyze",
+        "consider",
+        "pondering",
+        "deliberation",
     ];
-    
+
     let mut result = response.to_string();
-    
+
     // Strip each known tag and its content
     for tag in &tags_to_strip {
         // Match <tag>...</tag> including with attributes and newlines
@@ -338,17 +356,20 @@ fn sanitize_response(response: &str) -> String {
             result = re.replace_all(&result, "").to_string();
         }
     }
-    
+
     // Also remove any remaining orphaned opening/closing tags
     if let Ok(orphan_re) = regex::Regex::new(r"</?[\w]+[^>]*>") {
         result = orphan_re.replace_all(&result, "").to_string();
     }
-    
+
+    // Remove markdown emphasis markers (asterisks)
+    result = result.replace("*", "");
+
     // Clean up extra whitespace (multiple spaces/newlines become single)
     if let Ok(ws_re) = regex::Regex::new(r"\s+") {
         result = ws_re.replace_all(&result, " ").to_string();
     }
-    
+
     result.trim().to_string()
 }
 
@@ -400,4 +421,3 @@ mod tests {
         assert_eq!(output, "Then finally the answer.");
     }
 }
-
