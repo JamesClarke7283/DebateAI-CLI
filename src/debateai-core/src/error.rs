@@ -19,4 +19,10 @@ pub enum DebateError {
 
     #[error("Unknown debate format: {0}")]
     UnknownFormat(String),
+
+    #[error("TTS error: {0}")]
+    TtsError(String),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
 }

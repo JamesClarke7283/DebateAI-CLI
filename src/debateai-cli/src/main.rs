@@ -5,9 +5,11 @@
 use clap::{ArgAction, Parser};
 use colored::Colorize;
 use debateai_core::{
-    debate_format, AIParticipant, DebateConfig, DebateEvent, DebateOrchestrator, ParticipantRole,
+    debate_format, AIParticipant, Config, DebateConfig, DebateEvent, DebateOrchestrator,
+    DebateTts, ParticipantRole, VoicesConfig, combine_audio_segments, generate_output_filename,
 };
 use std::env;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -37,6 +39,31 @@ struct Cli {
     /// Number of debate rounds (minimum 4)
     #[arg(short, long, default_value = "6", value_name = "ROUNDS")]
     rounds: u32,
+
+    /// Output directory for audio files (default: current directory)
+    #[arg(short, long, default_value = ".", value_name = "DIR")]
+    output_dir: PathBuf,
+
+    /// Disable audio output (text-only mode)
+    #[arg(long)]
+    disable_audio: bool,
+
+    /// Maximum reasoning tokens for models (0 = model default, -1 = unlimited)
+    #[arg(long, default_value = "8192", value_name = "TOKENS")]
+    reasoning_tokens: i32,
+
+    /// Path to custom config.toml file
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Voice IDs for participants (specify in order: FOR, AGAINST)
+    /// Examples: bf_emma, bm_george, af_sky, am_adam
+    #[arg(long, action = ArgAction::Append, value_name = "VOICE")]
+    voice: Vec<String>,
+
+    /// Announcer voice ID (for section announcements in audio)
+    #[arg(long, value_name = "VOICE")]
+    announcer_voice: Option<String>,
 }
 
 #[tokio::main]
@@ -45,6 +72,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
+
+    // Load configuration
+    let mut config = if let Some(config_path) = &cli.config {
+        Config::load(config_path)?
+    } else if PathBuf::from("config.toml").exists() {
+        Config::load("config.toml")?
+    } else {
+        debateai_core::config::default_config()
+    };
+
+    // Override voices from CLI if provided
+    if let Some(for_voice) = cli.voice.first() {
+        config.voices.for_voice = for_voice.clone();
+    }
+    if let Some(against_voice) = cli.voice.get(1) {
+        config.voices.against_voice = against_voice.clone();
+    }
+    if let Some(announcer) = &cli.announcer_voice {
+        config.voices.announcer_voice = announcer.clone();
+    }
 
     // Get API configuration from environment
     let api_base = env::var("OPENAI_API_BASE")
@@ -60,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Validate rounds
-    let rounds = cli.rounds.max(4); // Minimum of 4 rounds
+    let rounds = cli.rounds.max(4);
     if cli.rounds < 4 {
         eprintln!(
             "{}",
@@ -101,7 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Create participants
+    // Create participants with voices from config
     let default_names = vec![
         "Candidate A".to_string(),
         "Candidate B".to_string(),
@@ -126,7 +173,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .cloned()
                 .unwrap_or_else(|| default_names[i % default_names.len()].clone());
             let role = roles[i % roles.len()].clone();
-            AIParticipant::new(name, model.clone(), role)
+            let voice = config.get_voice(role == ParticipantRole::For).to_string();
+            AIParticipant::new(name, model.clone(), role).with_voice(voice)
         })
         .collect();
 
@@ -153,31 +201,113 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             p.model.dimmed()
         );
     }
+    
+    if !cli.disable_audio {
+        println!();
+        println!("{} {}", "Audio Output:".bold(), cli.output_dir.display().to_string().bright_green());
+    }
+    
     println!();
     println!("{}", "─".repeat(70).dimmed());
 
     // Create debate configuration
-    let config = DebateConfig::new(&cli.topic, api_base, api_key);
+    let debate_config = DebateConfig::new(&cli.topic, api_base, api_key);
 
     // Create orchestrator with event callback
-    let callback = create_console_callback();
-    let mut orchestrator = DebateOrchestrator::new(config, participants, format)?
+    let transcript_clone = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let transcript_for_callback = transcript_clone.clone();
+    
+    let callback = create_console_callback(transcript_for_callback);
+    let mut orchestrator = DebateOrchestrator::new(debate_config, participants.clone(), format)?
         .with_callback(callback);
 
     // Run the debate
-    let _transcript = orchestrator.run().await?;
+    let transcript = orchestrator.run().await?;
 
     println!();
     println!("{}", "═".repeat(70).bright_blue());
     println!("{}", "  Debate concluded.".bright_green().bold());
     println!("{}", "═".repeat(70).bright_blue());
+
+    // Generate TTS output unless disabled
+    if !cli.disable_audio {
+        println!();
+        println!("{}", "Generating audio output...".bright_yellow());
+        
+        // Create output directory if needed
+        std::fs::create_dir_all(&cli.output_dir)?;
+        
+        // Initialize TTS engine
+        match DebateTts::new(config.voices.clone()).await {
+            Ok(mut tts) => {
+                // Synthesize each message with graceful degradation
+                let mut audio_segments = Vec::new();
+                let mut failed_segments = 0;
+                
+                for message in &transcript {
+                    let role = &participants[message.speaker_index].role;
+                    print!("  Synthesizing {} ({})...", message.speaker_name.bright_cyan(), message.section);
+                    std::io::Write::flush(&mut std::io::stdout())?;
+                    
+                    match tts.synthesize_message(message, role) {
+                        Ok(audio) => {
+                            audio_segments.push(audio);
+                            println!(" {}", "✓".bright_green());
+                        }
+                        Err(e) => {
+                            failed_segments += 1;
+                            println!(" {} ({})", "✗".bright_red(), e);
+                            // Add silence instead of failing completely
+                            audio_segments.push(vec![0.0; 24000]); // 1 second of silence
+                        }
+                    }
+                }
+                
+                if failed_segments > 0 {
+                    println!("{}", format!("  Warning: {} segment(s) failed to synthesize", failed_segments).yellow());
+                }
+                
+                if !audio_segments.is_empty() {
+                    // Combine with gaps between speakers
+                    println!("  Combining audio segments...");
+                    let combined = combine_audio_segments(audio_segments, 1.0, 24000);
+                    
+                    // Save to file
+                    let filename = generate_output_filename(&cli.topic);
+                    let output_path = cli.output_dir.join(&filename);
+                    
+                    match tts.save_wav(&output_path, &combined) {
+                        Ok(_) => {
+                            println!();
+                            println!(
+                                "{} {}",
+                                "Audio saved:".bright_green().bold(),
+                                output_path.display().to_string().bright_white()
+                            );
+                        }
+                        Err(e) => {
+                            println!();
+                            println!("{} {}", "Failed to save audio:".red().bold(), e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("{} {}", "TTS initialization failed:".red().bold(), e);
+                println!("{}", "Skipping audio generation. Debate transcript completed successfully.".yellow());
+            }
+        }
+    }
+
     println!();
 
     Ok(())
 }
 
 /// Create a callback that prints debate events to the console.
-fn create_console_callback() -> Box<dyn Fn(DebateEvent) + Send + Sync> {
+fn create_console_callback(
+    _transcript: std::sync::Arc<std::sync::Mutex<Vec<debateai_core::DebateMessage>>>
+) -> Box<dyn Fn(DebateEvent) + Send + Sync> {
     Box::new(move |event| match event {
         DebateEvent::SectionStart { name, description } => {
             println!();

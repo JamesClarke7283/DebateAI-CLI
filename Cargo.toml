@@ -3,7 +3,7 @@ resolver = "2"
 members = ["src/debateai-cli", "src/debateai-core"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["James Clarke <jamesclarke7283@gmail.com>"]
 license = "GPL-3.0-or-later"
@@ -17,3 +17,7 @@ thiserror = "2"
 dotenvy = "0.15"
 clap = { version = "4", features = ["derive"] }
 colored = "3"
+toml = "0.9"
+kokoro-tiny = "0.1"
+hound = "3"
+reqwest = { version = "0.13", features = ["json"] }

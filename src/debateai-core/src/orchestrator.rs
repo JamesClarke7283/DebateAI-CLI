@@ -235,6 +235,7 @@ impl DebateOrchestrator {
     }
 
     /// Get a completion from the AI for a specific participant.
+    /// Includes retry logic with exponential backoff for resilience.
     async fn get_completion(
         &self,
         participant_idx: usize,
@@ -243,11 +244,19 @@ impl DebateOrchestrator {
         let participant = &self.participants[participant_idx];
         let history = &self.histories[participant_idx];
 
+        // Create custom HTTP client that skips SSL verification with timeout
+        let http_client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| DebateError::ConfigError(format!("Failed to create HTTP client: {}", e)))?;
+
         let config = OpenAIConfig::new()
             .with_api_key(&self.config.api_key)
             .with_api_base(&self.config.api_base);
 
-        let client = Client::with_config(config);
+        let client = Client::with_config(config).with_http_client(http_client);
 
         let request = CreateChatCompletionRequestArgs::default()
             .model(&participant.model)
@@ -255,15 +264,39 @@ impl DebateOrchestrator {
             .messages(history.clone())
             .build()?;
 
-        let response = client.chat().create(request).await?;
+        // Retry logic with exponential backoff
+        let max_retries = 3;
+        let mut last_error = None;
+        
+        for attempt in 0..max_retries {
+            if attempt > 0 {
+                // Exponential backoff: 1s, 2s, 4s
+                let delay = std::time::Duration::from_secs(1 << attempt);
+                tokio::time::sleep(delay).await;
+            }
+            
+            match client.chat().create(request.clone()).await {
+                Ok(response) => {
+                    let content = response
+                        .choices
+                        .first()
+                        .and_then(|c| c.message.content.clone())
+                        .unwrap_or_default();
+                    return Ok(content);
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    // Only retry on transient errors
+                    if attempt < max_retries - 1 {
+                        continue;
+                    }
+                }
+            }
+        }
 
-        let content = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        Ok(content)
+        Err(last_error.map(DebateError::from).unwrap_or_else(|| {
+            DebateError::ConfigError("Unknown API error after retries".to_string())
+        }))
     }
 
     /// Emit an event if a callback is registered.

@@ -1,0 +1,109 @@
+# DebateAI Configuration
+# This file contains system prompts and debate format settings
+
+[debate.presidential]
+name = "Presidential Debate"
+display_name = "Presidential Debate (Lincoln-Douglas Style)"
+min_participants = 2
+max_participants = 2
+
+# Default voices for TTS (kokoro-tiny voice IDs)
+[voices]
+for_voice = "bf_emma"
+against_voice = "bm_george"
+announcer_voice = "af_sky"
+
+# System prompts for participants
+[prompts]
+
+# System prompt for the participant arguing FOR the topic
+for_prompt = """
+You are {name} participating in a formal presidential-style debate.
+
+DEBATE TOPIC: {topic}
+
+YOUR POSITION: You are arguing IN FAVOR of the topic.
+YOUR OPPONENT: {opponent_name}
+
+DEBATE RULES:
+- Present clear, compelling arguments supported by evidence and reasoning
+- Address the specific question or topic directly
+- Acknowledge and counter your opponent's arguments respectfully  
+- Use rhetorical techniques: ethos (credibility), pathos (emotion), logos (logic)
+- Maintain a professional, presidential tone throughout
+- Do NOT acknowledge being an AI - stay fully in character
+
+SPEAKING STYLE:
+- Speak directly to the audience as if at a podium
+- Use confident, measured language befitting a presidential candidate
+- Structure your responses with clear opening, supporting points, and conclusion
+- Keep responses focused and within reasonable time limits
+"""
+
+# System prompt for the participant arguing AGAINST the topic
+against_prompt = """
+You are {name} participating in a formal presidential-style debate.
+
+DEBATE TOPIC: {topic}
+
+YOUR POSITION: You are arguing AGAINST the topic.
+YOUR OPPONENT: {opponent_name}
+
+DEBATE RULES:
+- Present clear, compelling arguments supported by evidence and reasoning
+- Address the specific question or topic directly
+- Acknowledge and counter your opponent's arguments respectfully
+- Use rhetorical techniques: ethos (credibility), pathos (emotion), logos (logic)
+- Maintain a professional, presidential tone throughout
+- Do NOT acknowledge being an AI - stay fully in character
+
+SPEAKING STYLE:
+- Speak directly to the audience as if at a podium
+- Use confident, measured language befitting a presidential candidate
+- Structure your responses with clear opening, supporting points, and conclusion
+- Keep responses focused and within reasonable time limits
+"""
+
+# Announcer prompt for section transitions
+announcer_template = """
+[DEBATE SECTION: {section_name}]
+{section_description}
+"""
+
+# Presidential debate section definitions
+# Based on real presidential debate format
+[[debate.presidential.sections]]
+name = "Opening Statements"
+description = "Each candidate has 2 minutes to present their opening position on the topic."
+speaker_order = [0, 1]
+max_tokens = 400
+
+[[debate.presidential.sections]]
+name = "Direct Response"
+description = "Candidates directly respond to the opening arguments presented by their opponent."
+speaker_order = [1, 0]
+max_tokens = 350
+
+[[debate.presidential.sections]]
+name = "Policy Discussion"
+description = "Candidates present specific policy positions and practical implications."
+speaker_order = [0, 1]
+max_tokens = 400
+
+[[debate.presidential.sections]]
+name = "Cross-Examination"
+description = "Candidates challenge each other's positions with pointed questions and rebuttals."
+speaker_order = [1, 0]
+max_tokens = 350
+
+[[debate.presidential.sections]]
+name = "Final Rebuttals"
+description = "Candidates address the strongest points made by their opponent and defend their position."
+speaker_order = [0, 1]
+max_tokens = 350
+
+[[debate.presidential.sections]]
+name = "Closing Statements"
+description = "Each candidate summarizes their position and makes their final appeal to the audience."
+speaker_order = [1, 0]
+max_tokens = 300
