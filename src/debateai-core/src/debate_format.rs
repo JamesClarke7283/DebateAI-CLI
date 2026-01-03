@@ -20,31 +20,31 @@ pub struct DebateSection {
 }
 
 /// Trait for defining debate formats.
-/// 
+///
 /// Implement this trait to create custom debate formats like
 /// parliamentary debates, Oxford-style debates, etc.
 pub trait DebateFormat: Send + Sync {
     /// Returns the name of this debate format.
     fn name(&self) -> &str;
-    
+
     /// Returns the display name for the format.
     fn display_name(&self) -> &str;
-    
+
     /// Returns all sections of the debate in order.
     fn sections(&self) -> Vec<DebateSection>;
-    
+
     /// Maximum number of participants allowed.
     fn max_participants(&self) -> usize;
-    
+
     /// Minimum number of participants required.
     fn min_participants(&self) -> usize;
-    
+
     /// Get system prompt for a participant based on their role.
     fn system_prompt(&self, topic: &str, role_name: &str, opponent_name: &str) -> String;
 }
 
 /// Presidential Debate Format (Michael Douglass style).
-/// 
+///
 /// A formal two-person debate with configurable rounds:
 /// - Opening statements (1 round)
 /// - Main argument rounds (configurable, at least 2)
@@ -57,7 +57,9 @@ pub struct PresidentialDebateFormat {
 
 impl PresidentialDebateFormat {
     pub fn new(rounds: u32) -> Self {
-        Self { rounds: rounds.max(4) }
+        Self {
+            rounds: rounds.max(4),
+        }
     }
 }
 
@@ -71,14 +73,14 @@ impl DebateFormat for PresidentialDebateFormat {
     fn name(&self) -> &str {
         "presidential"
     }
-    
+
     fn display_name(&self) -> &str {
         "Presidential Debate (Michael Douglass Format)"
     }
-    
+
     fn sections(&self) -> Vec<DebateSection> {
         let mut sections = Vec::new();
-        
+
         // Opening Statements (round 1)
         sections.push(DebateSection {
             name: "Opening Statements".to_string(),
@@ -86,19 +88,20 @@ impl DebateFormat for PresidentialDebateFormat {
             speaker_order: vec![0, 1],
             max_tokens: 300,
         });
-        
+
         // Main argument rounds (rounds - 3 to account for opening, rebuttal, closing)
         let main_rounds = (self.rounds as i32 - 3).max(1) as usize;
         for i in 0..main_rounds {
             let alternate = i % 2 == 1;
             sections.push(DebateSection {
                 name: format!("Main Arguments - Round {}", i + 1),
-                description: "Candidates elaborate on their positions with supporting arguments.".to_string(),
+                description: "Candidates elaborate on their positions with supporting arguments."
+                    .to_string(),
                 speaker_order: if alternate { vec![1, 0] } else { vec![0, 1] },
                 max_tokens: 400,
             });
         }
-        
+
         // Rebuttals (second to last round)
         sections.push(DebateSection {
             name: "Rebuttals".to_string(),
@@ -106,7 +109,7 @@ impl DebateFormat for PresidentialDebateFormat {
             speaker_order: vec![1, 0], // Reversed order for rebuttals
             max_tokens: 400,
         });
-        
+
         // Closing Statements (final round)
         sections.push(DebateSection {
             name: "Closing Statements".to_string(),
@@ -114,18 +117,18 @@ impl DebateFormat for PresidentialDebateFormat {
             speaker_order: vec![0, 1],
             max_tokens: 250,
         });
-        
+
         sections
     }
-    
+
     fn max_participants(&self) -> usize {
         2
     }
-    
+
     fn min_participants(&self) -> usize {
         2
     }
-    
+
     fn system_prompt(&self, topic: &str, role_name: &str, opponent_name: &str) -> String {
         format!(
             r#"You are {} participating in a formal presidential-style debate.
@@ -134,18 +137,33 @@ TOPIC: {}
 
 Your role is to argue {} the topic. Your opponent is {}.
 
+ARGUMENT REQUIREMENTS:
+- Support ALL claims with FACTS: cite specific statistics, studies, historical examples, and data
+- Name specific sources, researchers, organizations, or events when making claims
+- Avoid vague generalizations - be concrete and specific with numbers and dates
+- Counter opponent's arguments with contradicting evidence, not just rhetoric
+
 Guidelines:
 - Be persuasive, articulate, and professional
-- Use evidence and logical reasoning
+- Use evidence and logical reasoning - EVERY point should have supporting facts
 - Address your opponent's points when appropriate
 - Maintain a respectful but firm debating stance
 - Keep responses focused and within the time constraints
 - Do not break character or acknowledge being an AI
 
-Speak directly as if you are at a podium addressing an audience."#,
+CRITICAL OUTPUT RULES:
+- Output ONLY your spoken words - no scene directions or stage actions
+- Do NOT include any text in parentheses like "(Steps to podium)" or "(Leans forward)"
+- Do NOT include narration, descriptions of gestures, movements, or tone
+- Do NOT include asterisks for emphasis or any markdown formatting
+- The announcer provides context - just deliver your argument directly"#,
             role_name,
             topic,
-            if role_name.contains("FOR") || role_name.contains("Pro") { "IN FAVOR OF" } else { "AGAINST" },
+            if role_name.contains("FOR") || role_name.contains("Pro") {
+                "IN FAVOR OF"
+            } else {
+                "AGAINST"
+            },
             opponent_name
         )
     }
@@ -172,7 +190,7 @@ mod tests {
     fn test_presidential_format_minimum_rounds() {
         let format = PresidentialDebateFormat::new(4);
         let sections = format.sections();
-        
+
         // Minimum 4 rounds: opening, 1 main, rebuttal, closing
         assert_eq!(sections.len(), 4);
         assert_eq!(sections[0].name, "Opening Statements");
@@ -185,7 +203,7 @@ mod tests {
     fn test_presidential_format_six_rounds() {
         let format = PresidentialDebateFormat::new(6);
         let sections = format.sections();
-        
+
         // 6 rounds: opening, 3 main, rebuttal, closing
         assert_eq!(sections.len(), 6);
         assert_eq!(sections[0].name, "Opening Statements");
@@ -200,7 +218,7 @@ mod tests {
     fn test_presidential_format_alternating_speakers() {
         let format = PresidentialDebateFormat::new(6);
         let sections = format.sections();
-        
+
         // Main rounds should alternate speaker order
         assert_eq!(sections[1].speaker_order, vec![0, 1]); // Round 1: A then B
         assert_eq!(sections[2].speaker_order, vec![1, 0]); // Round 2: B then A

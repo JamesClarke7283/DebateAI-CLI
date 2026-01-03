@@ -3,10 +3,10 @@
 use kokoro_tiny::TtsEngine;
 use std::path::Path;
 
+use crate::config::VoicesConfig;
 use crate::error::DebateError;
 use crate::orchestrator::DebateMessage;
 use crate::participant::ParticipantRole;
-use crate::config::VoicesConfig;
 
 /// Audio segment from TTS synthesis.
 pub struct AudioSegment {
@@ -28,12 +28,17 @@ pub struct DebateTts {
 impl DebateTts {
     /// Initialize the TTS engine (downloads model on first run).
     pub async fn new(voices: VoicesConfig) -> Result<Self, DebateError> {
-        let engine = TtsEngine::new().await
+        let engine = TtsEngine::new()
+            .await
             .map_err(|e| DebateError::TtsError(format!("Failed to initialize TTS: {}", e)))?;
-        
+
         let available_voices = engine.voices();
-        
-        Ok(Self { engine, voices, available_voices })
+
+        Ok(Self {
+            engine,
+            voices,
+            available_voices,
+        })
     }
 
     /// Get list of available voice IDs.
@@ -49,7 +54,7 @@ impl DebateTts {
                 self.format_available_voices()
             )));
         }
-        
+
         if !self.available_voices.contains(&voice_id.to_string()) {
             return Err(DebateError::TtsError(format!(
                 "Unknown voice '{}'. Available voices:\n{}",
@@ -57,22 +62,26 @@ impl DebateTts {
                 self.format_available_voices()
             )));
         }
-        
+
         Ok(())
     }
 
     /// Format available voices for display.
     fn format_available_voices(&self) -> String {
-        let mut english_voices: Vec<&String> = self.available_voices
+        let mut english_voices: Vec<&String> = self
+            .available_voices
             .iter()
             .filter(|v| {
-                v.starts_with("af_") || v.starts_with("am_") ||
-                v.starts_with("bf_") || v.starts_with("bm_")
+                v.starts_with("af_")
+                    || v.starts_with("am_")
+                    || v.starts_with("bf_")
+                    || v.starts_with("bm_")
             })
             .collect();
         english_voices.sort();
-        
-        english_voices.iter()
+
+        english_voices
+            .iter()
             .map(|v| format!("  - {}", v))
             .collect::<Vec<_>>()
             .join("\n")
@@ -91,26 +100,31 @@ impl DebateTts {
     pub fn synthesize(&mut self, text: &str, voice_id: &str) -> Result<Vec<f32>, DebateError> {
         // Validate voice first
         self.validate_voice(voice_id)?;
-        
+
         // Split text into small chunks (kokoro has ~200 char safe limit)
         let chunks = split_into_chunks(text, 200);
-        
+
         let mut all_samples = Vec::new();
-        
+
         for chunk in chunks {
             if chunk.trim().is_empty() {
                 continue;
             }
-            
-            let samples = self.engine.synthesize(&chunk, Some(voice_id))
+
+            let samples = self
+                .engine
+                .synthesize(&chunk, Some(voice_id))
                 .map_err(|e| DebateError::TtsError(format!("Synthesis failed: {}", e)))?;
-            
+
             all_samples.extend(samples);
-            
-            // Add small pause between chunks (0.1 seconds at 24kHz)
-            all_samples.extend(vec![0.0; 2400]);
+
+            // Add pause between chunks (0.3 seconds at 24kHz) to prevent cutoff
+            all_samples.extend(vec![0.0; 7200]);
         }
-        
+
+        // Add trailing padding (0.5 seconds) at end of entire message to prevent final cutoff
+        all_samples.extend(vec![0.0; 12000]);
+
         Ok(all_samples)
     }
 
@@ -121,19 +135,24 @@ impl DebateTts {
     }
 
     /// Synthesize a debate message based on speaker role.
-    pub fn synthesize_message(&mut self, message: &DebateMessage, role: &ParticipantRole) -> Result<Vec<f32>, DebateError> {
+    pub fn synthesize_message(
+        &mut self,
+        message: &DebateMessage,
+        role: &ParticipantRole,
+    ) -> Result<Vec<f32>, DebateError> {
         let voice_id = match role {
             ParticipantRole::For => self.voices.for_voice.clone(),
             ParticipantRole::Against => self.voices.against_voice.clone(),
             ParticipantRole::Neutral => self.voices.announcer_voice.clone(),
         };
-        
+
         self.synthesize(&message.content, &voice_id)
     }
 
     /// Save audio samples to a WAV file.
     pub fn save_wav<P: AsRef<Path>>(&self, path: P, samples: &[f32]) -> Result<(), DebateError> {
-        self.engine.save_wav(path.as_ref().to_str().unwrap_or("output.wav"), samples)
+        self.engine
+            .save_wav(path.as_ref().to_str().unwrap_or("output.wav"), samples)
             .map_err(|e| DebateError::TtsError(format!("Failed to save WAV: {}", e)))
     }
 
@@ -151,20 +170,20 @@ impl DebateTts {
 fn split_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
-    
+
     // Split by sentence-ending punctuation
     for sentence in text.split_inclusive(&['.', '!', '?', ';'][..]) {
         let sentence = sentence.trim();
         if sentence.is_empty() {
             continue;
         }
-        
+
         if current_chunk.len() + sentence.len() > max_chars {
             if !current_chunk.is_empty() {
                 chunks.push(current_chunk.trim().to_string());
                 current_chunk = String::new();
             }
-            
+
             // If single sentence is too long, split by commas
             if sentence.len() > max_chars {
                 for part in sentence.split_inclusive(',') {
@@ -186,11 +205,11 @@ fn split_into_chunks(text: &str, max_chars: usize) -> Vec<String> {
             current_chunk.push(' ');
         }
     }
-    
+
     if !current_chunk.trim().is_empty() {
         chunks.push(current_chunk.trim().to_string());
     }
-    
+
     chunks
 }
 
@@ -200,16 +219,16 @@ pub fn adjust_audio_speed(samples: Vec<f32>, rate: f32) -> Vec<f32> {
     if (rate - 1.0).abs() < 0.001 {
         return samples; // No change needed
     }
-    
+
     // Calculate new length (slower = longer)
     let new_len = (samples.len() as f32 / rate) as usize;
     let mut result = Vec::with_capacity(new_len);
-    
+
     for i in 0..new_len {
         let src_pos = i as f32 * rate;
         let src_idx = src_pos as usize;
         let frac = src_pos - src_idx as f32;
-        
+
         if src_idx + 1 < samples.len() {
             // Linear interpolation between adjacent samples
             let sample = samples[src_idx] * (1.0 - frac) + samples[src_idx + 1] * frac;
@@ -218,24 +237,28 @@ pub fn adjust_audio_speed(samples: Vec<f32>, rate: f32) -> Vec<f32> {
             result.push(samples[src_idx]);
         }
     }
-    
+
     result
 }
 
 /// Combine multiple audio segments with silence gaps.
-pub fn combine_audio_segments(segments: Vec<Vec<f32>>, gap_seconds: f32, sample_rate: u32) -> Vec<f32> {
+pub fn combine_audio_segments(
+    segments: Vec<Vec<f32>>,
+    gap_seconds: f32,
+    sample_rate: u32,
+) -> Vec<f32> {
     let gap_samples = (gap_seconds * sample_rate as f32) as usize;
     let silence: Vec<f32> = vec![0.0; gap_samples];
-    
+
     let mut combined = Vec::new();
-    
+
     for (i, segment) in segments.into_iter().enumerate() {
         if i > 0 {
             combined.extend(&silence);
         }
         combined.extend(segment);
     }
-    
+
     combined
 }
 
@@ -252,14 +275,14 @@ pub fn generate_output_filename(topic: &str) -> String {
             }
         })
         .collect();
-    
+
     // Truncate if too long
     let truncated = if sanitized.len() > 50 {
         &sanitized[..50]
     } else {
         &sanitized
     };
-    
+
     format!("DebateAI - {}.wav", truncated.trim())
 }
 
@@ -287,7 +310,7 @@ mod tests {
         let seg1 = vec![1.0, 1.0];
         let seg2 = vec![2.0, 2.0];
         let combined = combine_audio_segments(vec![seg1, seg2], 0.1, 10); // 1 sample gap at 10Hz
-        
+
         assert_eq!(combined.len(), 5); // 2 + 1 gap + 2
         assert_eq!(combined[2], 0.0); // gap sample
     }

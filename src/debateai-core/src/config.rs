@@ -72,7 +72,7 @@ impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, DebateError> {
         let content = fs::read_to_string(path.as_ref())
             .map_err(|e| DebateError::ConfigError(format!("Failed to read config: {}", e)))?;
-        
+
         toml::from_str(&content)
             .map_err(|e| DebateError::ConfigError(format!("Failed to parse config: {}", e)))
     }
@@ -160,7 +160,8 @@ pub fn default_config() -> Config {
         prompts: PromptsConfig {
             for_prompt: DEFAULT_FOR_PROMPT.to_string(),
             against_prompt: DEFAULT_AGAINST_PROMPT.to_string(),
-            announcer_template: "[DEBATE SECTION: {section_name}]\n{section_description}".to_string(),
+            announcer_template: "[DEBATE SECTION: {section_name}]\n{section_description}"
+                .to_string(),
         },
     }
 }
@@ -181,9 +182,16 @@ DEBATE RULES:
 - Do NOT acknowledge being an AI - stay fully in character
 
 SPEAKING STYLE:
-- Speak directly to the audience as if at a podium
+- Speak directly to the audience
 - Use confident, measured language befitting a presidential candidate
 - Structure your responses with clear opening, supporting points, and conclusion
+
+CRITICAL OUTPUT RULES:
+- Output ONLY your spoken words - no scene directions or stage actions
+- Do NOT include any text in parentheses like "(Steps to podium)" or "(Leans forward)"
+- Do NOT include narration, descriptions of gestures, movements, or tone
+- Do NOT include asterisks for emphasis or any markdown formatting
+- The announcer provides context - just deliver your argument directly
 "#;
 
 const DEFAULT_AGAINST_PROMPT: &str = r#"You are {name} participating in a formal presidential-style debate.
@@ -202,7 +210,14 @@ DEBATE RULES:
 - Do NOT acknowledge being an AI - stay fully in character
 
 SPEAKING STYLE:
-- Speak directly to the audience as if at a podium
+- Speak directly to the audience
 - Use confident, measured language befitting a presidential candidate
 - Structure your responses with clear opening, supporting points, and conclusion
+
+CRITICAL OUTPUT RULES:
+- Output ONLY your spoken words - no scene directions or stage actions
+- Do NOT include any text in parentheses like "(Steps to podium)" or "(Leans forward)"
+- Do NOT include narration, descriptions of gestures, movements, or tone
+- Do NOT include asterisks for emphasis or any markdown formatting
+- The announcer provides context - just deliver your argument directly
 "#;

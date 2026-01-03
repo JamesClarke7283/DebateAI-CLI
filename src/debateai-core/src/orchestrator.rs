@@ -186,11 +186,39 @@ impl DebateOrchestrator {
                 },
             ));
 
-            // Get response from the AI
-            let response = self.get_completion(speaker_idx, section.max_tokens).await?;
+            // Get response from the AI with retry logic for empty responses
+            let max_empty_retries = 3;
+            let mut sanitized_response = String::new();
 
-            // Sanitize the response (strip reasoning tokens)
-            let sanitized_response = sanitize_response(&response);
+            for attempt in 0..max_empty_retries {
+                let response = self.get_completion(speaker_idx, section.max_tokens).await?;
+                sanitized_response = sanitize_response(&response);
+
+                // Check if response is non-empty (has meaningful content)
+                if !sanitized_response.trim().is_empty() && sanitized_response.trim().len() > 10 {
+                    break;
+                }
+
+                // Log retry attempt (response was empty or too short)
+                if attempt < max_empty_retries - 1 {
+                    eprintln!(
+                        "  [Retry {}/{}] Empty response from {}, retrying...",
+                        attempt + 1,
+                        max_empty_retries,
+                        participant.name
+                    );
+                    // Brief delay before retry
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+
+            // If still empty after retries, return an error
+            if sanitized_response.trim().is_empty() || sanitized_response.trim().len() <= 10 {
+                return Err(DebateError::ConfigError(format!(
+                    "AI participant '{}' returned empty response after {} retries. Debate cannot continue.",
+                    participant.name, max_empty_retries
+                )));
+            }
 
             // Record the message
             let message = DebateMessage {

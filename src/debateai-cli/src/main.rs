@@ -5,9 +5,9 @@
 use clap::{ArgAction, Parser};
 use colored::Colorize;
 use debateai_core::{
-    debate_format, AIParticipant, Config, DebateConfig, DebateEvent, DebateOrchestrator,
-    DebateTts, ParticipantRole, VoicesConfig, combine_audio_segments, generate_output_filename,
-    adjust_audio_speed,
+    AIParticipant, Config, DebateConfig, DebateEvent, DebateOrchestrator, DebateTts,
+    ParticipantRole, VoicesConfig, adjust_audio_speed, combine_audio_segments, debate_format,
+    generate_output_filename,
 };
 use std::env;
 use std::path::PathBuf;
@@ -68,7 +68,7 @@ struct Cli {
 
     /// Speech rate for TTS (0.5 = half speed, 1.0 = normal, 2.0 = double)
     /// Lower values sound more measured/deliberate for debates
-    #[arg(long, default_value = "0.85", value_name = "RATE")]
+    #[arg(long, default_value = "0.75", value_name = "RATE")]
     speech_rate: f32,
 }
 
@@ -117,7 +117,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if cli.rounds < 4 {
         eprintln!(
             "{}",
-            format!("Warning: Rounds increased to minimum of 4 (was {}).", cli.rounds).yellow()
+            format!(
+                "Warning: Rounds increased to minimum of 4 (was {}).",
+                cli.rounds
+            )
+            .yellow()
         );
     }
 
@@ -207,12 +211,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             p.model.dimmed()
         );
     }
-    
+
     if !cli.disable_audio {
         println!();
-        println!("{} {}", "Audio Output:".bold(), cli.output_dir.display().to_string().bright_green());
+        println!(
+            "{} {}",
+            "Audio Output:".bold(),
+            cli.output_dir.display().to_string().bright_green()
+        );
     }
-    
+
     println!();
     println!("{}", "─".repeat(70).dimmed());
 
@@ -222,7 +230,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create orchestrator with event callback
     let transcript_clone = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let transcript_for_callback = transcript_clone.clone();
-    
+
     let callback = create_console_callback(transcript_for_callback);
     let mut orchestrator = DebateOrchestrator::new(debate_config, participants.clone(), format)?
         .with_callback(callback);
@@ -239,22 +247,188 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !cli.disable_audio {
         println!();
         println!("{}", "Generating audio output...".bright_yellow());
-        
+
         // Create output directory if needed
         std::fs::create_dir_all(&cli.output_dir)?;
-        
+
         // Initialize TTS engine
         match DebateTts::new(config.voices.clone()).await {
             Ok(mut tts) => {
                 // Synthesize each message with graceful degradation
-                let mut audio_segments = Vec::new();
+                let mut audio_segments: Vec<Vec<f32>> = Vec::new();
                 let mut failed_segments = 0;
-                
+
+                // Sample rate for silence calculation
+                let sample_rate = 24000;
+                let section_pause_seconds = 2.0; // Pause between sections
+                let speaker_pause_seconds = 1.0; // Pause between speakers
+
+                // Macro to synthesize announcer text (avoids closure borrow issues)
+                macro_rules! synth_announcer {
+                    ($tts:expr, $text:expr, $label:expr, $segments:expr, $failed:expr) => {{
+                        print!("  Synthesizing {}...", $label);
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        match $tts.synthesize_announcer($text) {
+                            Ok(audio) => {
+                                println!(" {}", "✓".bright_green());
+                                $segments.push(audio);
+                                true
+                            }
+                            Err(e) => {
+                                println!(" {} ({})", "✗".bright_red(), e);
+                                $failed += 1;
+                                false
+                            }
+                        }
+                    }};
+                }
+
+                // Get participant info for announcements
+                let for_participant = participants.iter().find(|p| p.role == ParticipantRole::For);
+                let against_participant = participants
+                    .iter()
+                    .find(|p| p.role == ParticipantRole::Against);
+
+                // === INTRO SECTION ===
+                // Welcome
+                synth_announcer!(
+                    tts,
+                    "Welcome to DebateAI.",
+                    "welcome",
+                    audio_segments,
+                    failed_segments
+                );
+                audio_segments.push(vec![0.0; (0.5 * sample_rate as f32) as usize]);
+
+                // Topic announcement
+                let topic_text = format!("Today's debate topic is: {}", cli.topic);
+                synth_announcer!(tts, &topic_text, "topic", audio_segments, failed_segments);
+                audio_segments.push(vec![
+                    0.0;
+                    (section_pause_seconds * sample_rate as f32) as usize
+                ]);
+
+                // Introduce FOR participant
+                if let Some(p) = for_participant {
+                    let intro_for = format!(
+                        "Arguing in favor, we have {}, powered by {}.",
+                        p.name, p.model
+                    );
+                    synth_announcer!(
+                        tts,
+                        &intro_for,
+                        &format!("{} intro", p.name),
+                        audio_segments,
+                        failed_segments
+                    );
+                    audio_segments.push(vec![
+                        0.0;
+                        (speaker_pause_seconds * sample_rate as f32) as usize
+                    ]);
+                }
+
+                // Introduce AGAINST participant
+                if let Some(p) = against_participant {
+                    let intro_against = format!(
+                        "Arguing against, we have {}, powered by {}.",
+                        p.name, p.model
+                    );
+                    synth_announcer!(
+                        tts,
+                        &intro_against,
+                        &format!("{} intro", p.name),
+                        audio_segments,
+                        failed_segments
+                    );
+                    audio_segments.push(vec![
+                        0.0;
+                        (section_pause_seconds * sample_rate as f32) as usize
+                    ]);
+                }
+
+                // Let the debate begin
+                synth_announcer!(
+                    tts,
+                    "Let the debate begin.",
+                    "start",
+                    audio_segments,
+                    failed_segments
+                );
+                audio_segments.push(vec![
+                    0.0;
+                    (section_pause_seconds * sample_rate as f32) as usize
+                ]);
+
+                let mut current_section: Option<String> = None;
+
                 for message in &transcript {
+                    // Check if we're in a new section - add section announcement
+                    if current_section.as_ref() != Some(&message.section) {
+                        // Add pause before new section (except first)
+                        if current_section.is_some() {
+                            audio_segments.push(vec![
+                                0.0;
+                                (section_pause_seconds * sample_rate as f32)
+                                    as usize
+                            ]);
+                        }
+
+                        // Announce the new section with context
+                        let section_text = match message.section.as_str() {
+                            "Opening Statements" => "Opening Statements.".to_string(),
+                            "Rebuttals" => "Now, the rebuttals.".to_string(),
+                            "Closing Statements" => "And now, closing statements.".to_string(),
+                            s if s.starts_with("Main Arguments") => format!("{}.", s),
+                            s => format!("{}.", s),
+                        };
+
+                        synth_announcer!(
+                            tts,
+                            &section_text,
+                            &format!("section: {}", message.section),
+                            audio_segments,
+                            failed_segments
+                        );
+                        audio_segments.push(vec![
+                            0.0;
+                            (speaker_pause_seconds * sample_rate as f32)
+                                as usize
+                        ]);
+
+                        current_section = Some(message.section.clone());
+                    } else {
+                        // Add pause between speakers in same section
+                        audio_segments.push(vec![
+                            0.0;
+                            (speaker_pause_seconds * sample_rate as f32)
+                                as usize
+                        ]);
+                    }
+
+                    // Announce the speaker before their turn
+                    let speaker_role = &participants[message.speaker_index].role;
+                    let speaker_intro = format!(
+                        "{}, speaking {}.",
+                        message.speaker_name,
+                        speaker_role.display_name().to_lowercase()
+                    );
+                    synth_announcer!(
+                        tts,
+                        &speaker_intro,
+                        &format!("{} turn", message.speaker_name),
+                        audio_segments,
+                        failed_segments
+                    );
+                    audio_segments.push(vec![0.0; (0.5 * sample_rate as f32) as usize]);
+
                     let role = &participants[message.speaker_index].role;
-                    print!("  Synthesizing {} ({})...", message.speaker_name.bright_cyan(), message.section);
+                    print!(
+                        "  Synthesizing {} ({})...",
+                        message.speaker_name.bright_cyan(),
+                        message.section
+                    );
                     std::io::Write::flush(&mut std::io::stdout())?;
-                    
+
                     match tts.synthesize_message(message, role) {
                         Ok(audio) => {
                             audio_segments.push(audio);
@@ -264,20 +438,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             failed_segments += 1;
                             println!(" {} ({})", "✗".bright_red(), e);
                             // Add silence instead of failing completely
-                            audio_segments.push(vec![0.0; 24000]); // 1 second of silence
+                            audio_segments.push(vec![0.0; sample_rate]); // 1 second of silence
                         }
                     }
                 }
-                
-                if failed_segments > 0 {
-                    println!("{}", format!("  Warning: {} segment(s) failed to synthesize", failed_segments).yellow());
+
+                // Add closing announcement
+                let outro_text = "This concludes today's debate. Thank you for listening.";
+                audio_segments.push(vec![
+                    0.0;
+                    (section_pause_seconds * sample_rate as f32) as usize
+                ]);
+                print!("  Synthesizing outro announcement...");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                match tts.synthesize_announcer(outro_text) {
+                    Ok(audio) => {
+                        audio_segments.push(audio);
+                        println!(" {}", "✓".bright_green());
+                    }
+                    Err(e) => {
+                        failed_segments += 1;
+                        println!(" {} ({})", "✗".bright_red(), e);
+                    }
                 }
-                
+
+                if failed_segments > 0 {
+                    println!(
+                        "{}",
+                        format!(
+                            "  Warning: {} segment(s) failed to synthesize",
+                            failed_segments
+                        )
+                        .yellow()
+                    );
+                }
+
                 if !audio_segments.is_empty() {
-                    // Combine with gaps between speakers
+                    // Combine segments (pauses are already added inline)
                     println!("  Combining audio segments...");
-                    let combined = combine_audio_segments(audio_segments, 1.0, 24000);
-                    
+                    let combined = combine_audio_segments(audio_segments, 0.0, 24000);
+
                     // Apply speech rate adjustment
                     let adjusted = if cli.speech_rate != 1.0 {
                         println!("  Adjusting speech rate to {}x...", cli.speech_rate);
@@ -285,11 +485,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         combined
                     };
-                    
+
                     // Save to file
                     let filename = generate_output_filename(&cli.topic);
                     let output_path = cli.output_dir.join(&filename);
-                    
+
                     match tts.save_wav(&output_path, &adjusted) {
                         Ok(_) => {
                             println!();
@@ -308,7 +508,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => {
                 println!("{} {}", "TTS initialization failed:".red().bold(), e);
-                println!("{}", "Skipping audio generation. Debate transcript completed successfully.".yellow());
+                println!(
+                    "{}",
+                    "Skipping audio generation. Debate transcript completed successfully.".yellow()
+                );
             }
         }
     }
@@ -320,7 +523,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Create a callback that prints debate events to the console.
 fn create_console_callback(
-    _transcript: std::sync::Arc<std::sync::Mutex<Vec<debateai_core::DebateMessage>>>
+    _transcript: std::sync::Arc<std::sync::Mutex<Vec<debateai_core::DebateMessage>>>,
 ) -> Box<dyn Fn(DebateEvent) + Send + Sync> {
     Box::new(move |event| match event {
         DebateEvent::SectionStart { name, description } => {
@@ -328,9 +531,7 @@ fn create_console_callback(
             println!("{}", "═".repeat(70).bright_magenta());
             println!(
                 "{}",
-                format!("  📢 ANNOUNCER: {}", name)
-                    .bright_magenta()
-                    .bold()
+                format!("  📢 ANNOUNCER: {}", name).bright_magenta().bold()
             );
             println!("  {}", description.dimmed());
             println!("{}", "═".repeat(70).bright_magenta());
