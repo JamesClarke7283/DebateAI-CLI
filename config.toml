@@ -10,7 +10,7 @@ max_participants = 2
 # Default voices for TTS (kokoro-tiny voice IDs)
 [voices]
 for_voice = "bf_emma"
-against_voice = "bm_george"
+against_voice = "bm_fable"
 announcer_voice = "af_sky"
 
 # System prompts for participants
